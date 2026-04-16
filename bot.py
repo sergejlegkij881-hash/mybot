@@ -290,16 +290,19 @@ def main():
         logger.error("DATABASE_URL не задан в переменных окружения")
         return
 
-    init_db()
-
+    def main():
+    # ... инициализация ...
     app = Application.builder().token(API_TOKEN).build()
 
-    # Команды
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("reset", reset))
-    app.add_handler(CommandHandler("добавить", add_product_cmd))
-    app.add_handler(CommandHandler("удалить", del_product_cmd))
-    app.add_handler(CommandHandler("товары", list_products_cmd))
+    app.add_handler(CommandHandler("add_product", add_product_cmd))
+    app.add_handler(CommandHandler("del_product", del_product_cmd))
+    app.add_handler(CommandHandler("list_products", list_products_cmd))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    app.add_error_handler(error_handler)
+    # ...
+
 
     # Обработка текстовых сообщений
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
