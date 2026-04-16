@@ -2,21 +2,32 @@ import logging
 import os
 from datetime import datetime
 from telegram import Update, ReplyKeyboardMarkup, KeyboardButton
-from telegram.ext import Application, CommandHandler, MessageHandler, filters, CallbackQueryHandler
-import psycopg2   # <--- исправлено
+from telegram.ext import (
+    Application, CommandHandler, MessageHandler,
+    filters, ContextTypes, CallbackContext
+)
+import psycopg2
 
+# === НАСТРОЙКИ ===
 API_TOKEN = os.environ.get("BOT_TOKEN")
 DATABASE_URL = os.environ.get("DATABASE_URL")
-logging.basicConfig(level=logging.INFO)
 
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+)
+logger = logging.getLogger(__name__)
+
+# === КЛАВИАТУРА ===
 kb = ReplyKeyboardMarkup(
     keyboard=[
-        [KeyboardButton(text="👤 Добавить")],
-        [KeyboardButton(text="💬 Мой запрос")],
-        [KeyboardButton(text="📅 Сбросить запрос")]
+        [KeyboardButton(text="➕ Добавить товар"), KeyboardButton(text="💳 Внести оплату")],
+        [KeyboardButton(text="💰 Мой долг"), KeyboardButton(text="📜 История")]
     ],
     resize_keyboard=True
 )
+
+# === РАБОТА С БАЗОЙ ДАННЫХ ===
 def get_conn():
     return psycopg2.connect(DATABASE_URL)
 
@@ -88,7 +99,7 @@ def build_table(products):
     FREE_ROWS = 5
     header = "Заполни таблицу (кол-во и цену можно менять, 0 = не брал):\n\n"
     line = "{:<16}| {:<6} | {:<7} | {}\n"
-    sep  = "-" * 16 + "+" + "-" * 8 + "+" + "-" * 9 + "+" + "-" * 7 + "\n"
+    sep = "-" * 16 + "+" + "-" * 8 + "+" + "-" * 9 + "+" + "-" * 7 + "\n"
 
     table = header
     table += line.format("Наименование", "Кол-во", "Цена", "Сумма")
@@ -97,7 +108,6 @@ def build_table(products):
     for name, price in products:
         table += line.format(name[:16], "0", str(price), "0")
 
-    # Свободные строки
     for _ in range(FREE_ROWS):
         table += line.format("", "", "", "")
 
@@ -132,37 +142,44 @@ def parse_table(text):
         items.append((name, qty, price, summ))
     return items
 
+# === ОБРАБОТЧИКИ КОМАНД ===
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     debt = get_debt()
-    await update.message.reply_text(f"✅ Бот запущен!\nТекущий долг: {debt} грн", reply_markup=kb)
+    await update.message.reply_text(
+        f"✅ Бот запущен!\nТекущий долг: {debt} грн",
+        reply_markup=kb
+    )
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.strip()
     user_data = context.user_data
 
-    # ───── ДОБАВИТЬ ТОВАР ─────
+    # Добавить товар
     if text == "➕ Добавить товар":
         user_data.clear()
         user_data["mode"] = "table"
         products = get_products()
         table = build_table(products)
-        await update.message.reply_text(f"```\n{table}\n```", parse_mode="Markdown")
+        await update.message.reply_text(
+            f"<pre>{table}</pre>",
+            parse_mode="HTML"
+        )
         return
 
-    # ───── ОПЛАТА ─────
+    # Внести оплату
     if text == "💳 Внести оплату":
         user_data.clear()
         user_data["mode"] = "pay"
         await update.message.reply_text("Введите сумму оплаты:")
         return
 
-    # ───── ДОЛГ ─────
+    # Мой долг
     if text == "💰 Мой долг":
         debt = get_debt()
         await update.message.reply_text(f"💰 Текущий долг: {debt} грн")
         return
 
-    # ───── ИСТОРИЯ ─────
+    # История
     if text == "📜 История":
         history = get_history()
         if history:
@@ -171,7 +188,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("📜 История пуста.")
         return
 
-    # ───── РЕЖИМ ОПЛАТЫ ─────
+    # Режим оплаты
     if user_data.get("mode") == "pay":
         try:
             val = float(text.replace(',', '.').replace(' ', ''))
@@ -185,7 +202,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             user_data.clear()
         return
 
-    # ───── РЕЖИМ ТАБЛИЦЫ ─────
+    # Режим таблицы (добавление товаров)
     if user_data.get("mode") == "table":
         items = parse_table(text)
         if not items:
@@ -195,7 +212,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         total = 0
         result_lines = []
         line = "{:<16}| {:<6} | {:<7} | {}"
-
         sep = "-" * 16 + "+" + "-" * 8 + "+" + "-" * 9 + "+" + "-" * 7
         result_lines.append(line.format("Наименование", "Кол-во", "Цена", "Сумма"))
         result_lines.append(sep)
@@ -203,7 +219,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         for name, qty, price, summ in items:
             total += summ
             result_lines.append(line.format(name[:16], str(qty), str(price), str(summ)))
-            # Обновляем цену по умолчанию в БД
             save_product(name, price)
 
         result_lines.append(sep)
@@ -213,10 +228,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         add_history(f"{datetime.now().strftime('%d.%m')} ➕ Товар: +{round(total, 2)} грн")
         debt = get_debt()
 
-        msg = "```\n" + "\n".join(result_lines) + "\n```"
-        msg += f"\n\n✅ Добавлено в долг!\n💰 Общий долг: {debt} грн"
-
-        await update.message.reply_text(msg, parse_mode="Markdown")
+        msg = "\n".join(result_lines)
+        await update.message.reply_text(
+            f"<pre>{msg}</pre>\n\n✅ Добавлено в долг!\n💰 Общий долг: {debt} грн",
+            parse_mode="HTML"
+        )
         user_data.clear()
         return
 
@@ -227,10 +243,7 @@ async def reset(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("🗑 Все данные удалены.")
 
 async def add_product_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """
-    /добавить Название Цена
-    Пример: /добавить 38бл 35
-    """
+    """/добавить Название Цена"""
     args = context.args
     if len(args) < 2:
         await update.message.reply_text("Формат: /добавить Название Цена\nПример: /добавить 38бл 35")
@@ -244,10 +257,7 @@ async def add_product_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ Ошибка. Формат: /добавить Название Цена")
 
 async def del_product_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """
-    /удалить Название
-    Пример: /удалить 38бл
-    """
+    """/удалить Название"""
     if not context.args:
         await update.message.reply_text("Формат: /удалить Название\nПример: /удалить 38бл")
         return
@@ -256,7 +266,6 @@ async def del_product_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(f"🗑 Товар '{name}' удалён из списка.")
 
 async def list_products_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Список всех товаров"""
     products = get_products()
     if not products:
         await update.message.reply_text("📦 Список товаров пуст.\nДобавь через /добавить Название Цена")
@@ -266,16 +275,41 @@ async def list_products_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         lines.append(f"• {name} — {price} грн")
     await update.message.reply_text("\n".join(lines))
 
+# === ГЛОБАЛЬНЫЙ ОБРАБОТЧИК ОШИБОК (чтобы бот не падал) ===
+async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    logger.error(msg="Exception while handling an update:", exc_info=context.error)
+    if update and update.effective_message:
+        await update.effective_message.reply_text("⚠️ Произошла внутренняя ошибка. Попробуйте позже.")
+
+# === ЗАПУСК ===
 def main():
+    if not API_TOKEN:
+        logger.error("BOT_TOKEN не задан в переменных окружения")
+        return
+    if not DATABASE_URL:
+        logger.error("DATABASE_URL не задан в переменных окружения")
+        return
+
     init_db()
+
     app = Application.builder().token(API_TOKEN).build()
+
+    # Команды
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("reset", reset))
     app.add_handler(CommandHandler("добавить", add_product_cmd))
     app.add_handler(CommandHandler("удалить", del_product_cmd))
     app.add_handler(CommandHandler("товары", list_products_cmd))
+
+    # Обработка текстовых сообщений
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+
+    # Глобальный обработчик ошибок
+    app.add_error_handler(error_handler)
+
+    logger.info("Бот запущен и готов к работе")
     app.run_polling(allowed_updates=Update.ALL_TYPES)
 
 if __name__ == "__main__":
     main()
+    
