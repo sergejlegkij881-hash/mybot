@@ -2,8 +2,8 @@ import logging
 import os
 from datetime import datetime
 from telegram import Update, ReplyKeyboardMarkup, KeyboardButton
-from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
-import psycopg2
+from telegram.ext import Application, CommandHandler, MessageHandler, filters, CallbackQueryHandler
+import psycopg2   # <--- исправлено
 
 API_TOKEN = os.environ.get("BOT_TOKEN")
 DATABASE_URL = os.environ.get("DATABASE_URL")
@@ -11,12 +11,12 @@ logging.basicConfig(level=logging.INFO)
 
 kb = ReplyKeyboardMarkup(
     keyboard=[
-        [KeyboardButton(text="➕ Добавить товар"), KeyboardButton(text="💳 Внести оплату")],
-        [KeyboardButton(text="💰 Мой долг"), KeyboardButton(text="📜 История")]
+        [KeyboardButton(text="👤 Добавить")],
+        [KeyboardButton(text="💬 Мой запрос")],
+        [KeyboardButton(text="📅 Сбросить запрос")]
     ],
     resize_keyboard=True
 )
-
 def get_conn():
     return psycopg2.connect(DATABASE_URL)
 
